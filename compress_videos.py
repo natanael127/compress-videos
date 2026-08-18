@@ -1,16 +1,15 @@
 # ===================== IMPORTS ============================================== #
 import os
-import sys
 import time
 import shutil
 import tempfile
+import argparse
 import pyinputplus
 
 # ===================== CONSTANTS ============================================ #
 INPUT_FORMATS = [".mp4", ".mkv", ".avi", ".MOV"]
 OUTPUT_FORMAT = ".mp4"
 TMP_FILE_PREFIX = "compressed_video_"
-ARG_INDEX_PATH = 1
 FILE_ERROR_LOG = "video_compression_errors.log"
 
 # ===================== AUXILIARY FUNCTIONS ================================== #
@@ -39,8 +38,11 @@ def data_size_string(num_bytes):
 
 # ===================== MAIN SCRIPT ========================================== #
 # --------------------- Argument validation
-input_arg = sys.argv[ARG_INDEX_PATH]
-input_arg = os.path.abspath(input_arg)
+parser = argparse.ArgumentParser(description="Compress videos using ffmpeg (libx265).")
+parser.add_argument("path", help="Path to a video file or a directory to search recursively")
+args = parser.parse_args()
+
+input_arg = os.path.abspath(args.path)
 if os.path.isfile(input_arg):
     list_videos = [input_arg]
 elif os.path.isdir(input_arg):
