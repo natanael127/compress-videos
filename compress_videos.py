@@ -4,6 +4,7 @@ import time
 import shutil
 import tempfile
 import argparse
+import subprocess
 import pyinputplus
 from datetime import datetime
 
@@ -26,7 +27,7 @@ def list_files_by_extension_recursive(directory, extension):
             file_path = os.path.join(root, file_item)
             for ext in list_extensions:
                 if file_path.endswith(ext):
-                    output_list.append(os.path.join(directory, file_path))
+                    output_list.append(file_path)
     return output_list
 
 def parse_datetime_arg(value):
@@ -60,6 +61,10 @@ def main():
     )
     args = parser.parse_args()
 
+    if shutil.which("ffmpeg") is None:
+        print("ffmpeg not found in PATH")
+        return
+
     input_arg = os.path.abspath(args.path)
     if os.path.isfile(input_arg):
         list_videos = [input_arg]
@@ -92,12 +97,22 @@ def main():
     storage_saving = 0
     for input_video_path in list_videos:
         output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
-        cmd_result = os.system(f"ffmpeg -i \"{input_video_path}\" -vcodec libx265 -crf 28 \"{temp_video_path}\"")
-        if cmd_result == 0: # Success
-            storage_saving += os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
-            os.remove(input_video_path)
-            shutil.move(temp_video_path, output_video_path)
-        else: # Error
+        cmd_result = subprocess.run(
+            ["ffmpeg", "-i", input_video_path, "-vcodec", "libx265", "-crf", "28", temp_video_path]
+        ).returncode
+        conversion_succeeded = cmd_result == 0 and os.path.isfile(temp_video_path)
+        if conversion_succeeded: # Success
+            saving = os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
+            try:
+                shutil.move(temp_video_path, output_video_path)
+            except OSError as move_error:
+                conversion_succeeded = False
+                cmd_result = str(move_error)
+            else:
+                storage_saving += saving
+                if input_video_path != output_video_path:
+                    os.remove(input_video_path)
+        if not conversion_succeeded: # Error
             if os.path.isfile(temp_video_path):
                 os.remove(temp_video_path)
             error_log = "[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] Returned " + str(cmd_result) + " for file \"" + input_video_path + "\"\n"
