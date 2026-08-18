@@ -19,7 +19,7 @@ from rich.progress import (
 )
 
 # ===================== CONSTANTS ============================================ #
-INPUT_FORMATS = [".mp4", ".mkv", ".avi", ".MOV"]
+INPUT_FORMATS = [".mp4", ".mkv", ".avi", ".mov"]
 OUTPUT_FORMAT = ".mp4"
 TMP_FILE_PREFIX = "compressed_video_"
 FILE_ERROR_LOG = "video_compression_errors.log"
@@ -38,7 +38,7 @@ def list_files_by_extension_recursive(directory, extension):
         for file_item in files:
             file_path = os.path.join(root, file_item)
             for ext in list_extensions:
-                if file_path.endswith(ext):
+                if file_path.lower().endswith(ext.lower()):
                     output_list.append(file_path)
     return output_list
 
