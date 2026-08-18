@@ -7,11 +7,12 @@ import argparse
 import subprocess
 from datetime import datetime
 
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
 from rich.prompt import Confirm
 from rich.tree import Tree
 from rich.rule import Rule
+from rich.table import Table
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -64,6 +65,28 @@ def data_size_string(num_bytes):
         num_bytes /= 1024.0
         i += 1
     return f"{num_bytes:,.3f} {units[i]}B"
+
+class PairedTask:
+    """Drives one task across several Progress instances kept in lockstep,
+    so a bar and its metrics can live in separate table cells."""
+    def __init__(self, *progress_bars):
+        self.progress_bars = progress_bars
+        self.task_ids = []
+
+    def add_task(self, *args, **kwargs):
+        self.task_ids = [progress_bar.add_task(*args, **kwargs) for progress_bar in self.progress_bars]
+
+    def update(self, **kwargs):
+        for progress_bar, task_id in zip(self.progress_bars, self.task_ids):
+            progress_bar.update(task_id, **kwargs)
+
+    def reset(self, **kwargs):
+        for progress_bar, task_id in zip(self.progress_bars, self.task_ids):
+            progress_bar.reset(task_id, **kwargs)
+
+    def advance(self, amount=1):
+        for progress_bar, task_id in zip(self.progress_bars, self.task_ids):
+            progress_bar.advance(task_id, amount)
 
 def build_file_tree(root_directory, file_paths):
     tree = Tree(f"[bold]{root_directory}[/bold]")
@@ -149,35 +172,43 @@ def main():
 
     # --------------------- Video conversion
     storage_saving = 0
-    overall_progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
+
+    overall_bar_progress = Progress(SpinnerColumn(), BarColumn(), console=console)
+    overall_count_progress = Progress(MofNCompleteColumn(), console=console)
+    overall_time_progress = Progress(TimeElapsedColumn(), console=console)
+
+    current_bar_progress = Progress(SpinnerColumn(), BarColumn(), console=console)
+    current_percent_progress = Progress(TaskProgressColumn(), console=console)
+    current_time_progress = Progress(TimeRemainingColumn(), console=console)
+
+    video_name_progress = Progress(TextColumn("{task.description}"), console=console)
+
+    progress_table = Table.grid(padding=(0, 2))
+    for _ in range(4):
+        progress_table.add_column(justify="left")
+    progress_table.add_row(
+        overall_bar_progress, overall_count_progress, overall_time_progress, "Total elapsed time"
     )
-    current_progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
+    progress_table.add_row(
+        current_bar_progress, current_percent_progress, current_time_progress,
+        "Estimated time remaining for the current video",
     )
+    progress_table.add_row(video_name_progress, "", "", "")
+
+    overall_task = PairedTask(overall_bar_progress, overall_count_progress, overall_time_progress)
+    current_task = PairedTask(current_bar_progress, current_percent_progress, current_time_progress)
+    video_name_task = PairedTask(video_name_progress)
+
     with tempfile.TemporaryDirectory(prefix=TMP_FILE_PREFIX) as temp_dir:
         temp_video_path = os.path.join(temp_dir, "output" + OUTPUT_FORMAT)
-        with Live(Group(overall_progress, current_progress), console=console):
-            overall_task = overall_progress.add_task("Compressing videos", total=len(list_videos))
-            current_task = current_progress.add_task("Current file", total=None)
+        with Live(progress_table, console=console):
+            overall_task.add_task("Compressing videos", total=len(list_videos))
+            current_task.add_task("Current file", total=None)
+            video_name_task.add_task("", total=None)
             for input_video_path in list_videos:
-                overall_progress.update(overall_task, description=os.path.basename(input_video_path))
+                video_name_task.update(description=os.path.basename(input_video_path))
                 video_duration = get_video_duration_seconds(input_video_path)
-                current_progress.reset(
-                    current_task,
-                    total=video_duration,
-                    description=os.path.basename(input_video_path),
-                )
+                current_task.reset(total=video_duration)
                 output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
                 with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(
@@ -194,7 +225,7 @@ def main():
                                 out_time_seconds = int(line.split("=", 1)[1]) / 1_000_000
                                 if video_duration is not None:
                                     out_time_seconds = min(out_time_seconds, video_duration)
-                                current_progress.update(current_task, completed=out_time_seconds)
+                                current_task.update(completed=out_time_seconds)
                         cmd_result = proc.wait()
                     except KeyboardInterrupt:
                         proc.terminate()
@@ -226,7 +257,7 @@ def main():
                         )
                         with open(FILE_ERROR_LOG, "a", encoding="utf-8") as fp:
                             fp.write(error_log)
-                overall_progress.advance(overall_task)
+                overall_task.advance()
     console.print(f"================\n[green]You have just saved {data_size_string(storage_saving)}[/green]")
 
 if __name__ == "__main__":
