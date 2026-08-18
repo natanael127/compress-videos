@@ -5,14 +5,26 @@ import shutil
 import tempfile
 import argparse
 import subprocess
-import pyinputplus
 from datetime import datetime
+
+from rich.console import Console
+from rich.prompt import Confirm
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    MofNCompleteColumn,
+    TimeElapsedColumn,
+)
 
 # ===================== CONSTANTS ============================================ #
 INPUT_FORMATS = [".mp4", ".mkv", ".avi", ".MOV"]
 OUTPUT_FORMAT = ".mp4"
 TMP_FILE_PREFIX = "compressed_video_"
 FILE_ERROR_LOG = "video_compression_errors.log"
+
+console = Console()
 
 # ===================== AUXILIARY FUNCTIONS ================================== #
 def list_files_by_extension_recursive(directory, extension):
@@ -62,7 +74,7 @@ def main():
     args = parser.parse_args()
 
     if shutil.which("ffmpeg") is None:
-        print("ffmpeg not found in PATH")
+        console.print("[red]ffmpeg not found in PATH[/red]")
         return
 
     input_arg = os.path.abspath(args.path)
@@ -72,7 +84,7 @@ def main():
         list_videos = list_files_by_extension_recursive(input_arg, INPUT_FORMATS)
         list_videos.sort()
     else:
-        print("Invalid path")
+        console.print("[red]Invalid path[/red]")
         return
 
     if args.modified_before is not None:
@@ -80,54 +92,76 @@ def main():
         list_videos = [v for v in list_videos if os.path.getmtime(v) < cutoff_timestamp]
 
     if not list_videos:
-        print("No videos to process")
+        console.print("No videos to process")
         return
 
     if os.path.isdir(input_arg):
         for item in list_videos:
-            print(item)
-        print("\nListed items will be converted")
-        yes_or_no = pyinputplus.inputYesNo("Do you accept? [Y/N]: ")
-        if yes_or_no == "no":
+            console.print(item, style="dim")
+        console.print("\nListed items will be converted")
+        if not Confirm.ask("Do you accept?"):
             return
+
     # --------------------- Video conversion
     fp, temp_video_path = tempfile.mkstemp(suffix=OUTPUT_FORMAT, prefix=TMP_FILE_PREFIX)
     os.close(fp)
     os.remove(temp_video_path)
     storage_saving = 0
-    for input_video_path in list_videos:
-        output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
-        proc = subprocess.Popen(
-            ["ffmpeg", "-i", input_video_path, "-vcodec", "libx265", "-crf", "28", temp_video_path]
-        )
-        try:
-            cmd_result = proc.wait()
-        except KeyboardInterrupt:
-            proc.terminate()
-            proc.wait()
-            if os.path.isfile(temp_video_path):
-                os.remove(temp_video_path)
-            print(f"\nCancelled by user. You have just saved {data_size_string(storage_saving)}")
-            return
-        conversion_succeeded = cmd_result == 0 and os.path.isfile(temp_video_path)
-        if conversion_succeeded: # Success
-            saving = os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
-            try:
-                shutil.move(temp_video_path, output_video_path)
-            except OSError as move_error:
-                conversion_succeeded = False
-                cmd_result = str(move_error)
-            else:
-                storage_saving += saving
-                if input_video_path != output_video_path:
-                    os.remove(input_video_path)
-        if not conversion_succeeded: # Error
-            if os.path.isfile(temp_video_path):
-                os.remove(temp_video_path)
-            error_log = "[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] Returned " + str(cmd_result) + " for file \"" + input_video_path + "\"\n"
-            with open(FILE_ERROR_LOG, "a", encoding="utf-8") as fp:
-                fp.write(error_log)
-    print(f"================\nYou have just saved {data_size_string(storage_saving)}")
+    progress_columns = (
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )
+    with Progress(*progress_columns, console=console) as progress:
+        task = progress.add_task("Compressing videos", total=len(list_videos))
+        for input_video_path in list_videos:
+            progress.update(task, description=os.path.basename(input_video_path))
+            output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
+            with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file:
+                proc = subprocess.Popen(
+                    ["ffmpeg", "-y", "-nostdin", "-i", input_video_path,
+                     "-vcodec", "libx265", "-crf", "28", temp_video_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr_file,
+                )
+                try:
+                    cmd_result = proc.wait()
+                except KeyboardInterrupt:
+                    proc.terminate()
+                    proc.wait()
+                    if os.path.isfile(temp_video_path):
+                        os.remove(temp_video_path)
+                    console.print(
+                        f"\n[yellow]Cancelled by user. You have just saved {data_size_string(storage_saving)}[/yellow]"
+                    )
+                    return
+                conversion_succeeded = cmd_result == 0 and os.path.isfile(temp_video_path)
+                if conversion_succeeded: # Success
+                    saving = os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
+                    try:
+                        shutil.move(temp_video_path, output_video_path)
+                    except OSError as move_error:
+                        conversion_succeeded = False
+                        cmd_result = str(move_error)
+                    else:
+                        storage_saving += saving
+                        if input_video_path != output_video_path:
+                            os.remove(input_video_path)
+                if not conversion_succeeded: # Error
+                    if os.path.isfile(temp_video_path):
+                        os.remove(temp_video_path)
+                    stderr_file.seek(0)
+                    ffmpeg_output = stderr_file.read()
+                    error_log = (
+                        "[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] Returned " + str(cmd_result)
+                        + " for file \"" + input_video_path + "\"\n" + ffmpeg_output + "\n"
+                    )
+                    with open(FILE_ERROR_LOG, "a", encoding="utf-8") as fp:
+                        fp.write(error_log)
+            progress.advance(task)
+    console.print(f"================\n[green]You have just saved {data_size_string(storage_saving)}[/green]")
 
 if __name__ == "__main__":
     main()
