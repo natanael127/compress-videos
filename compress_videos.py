@@ -11,6 +11,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.prompt import Confirm
 from rich.tree import Tree
+from rich.rule import Rule
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -119,15 +120,28 @@ def main():
         console.print("[red]Invalid path[/red]")
         return
 
+    rejected_videos = []
     if args.modified_before is not None:
         cutoff_timestamp = args.modified_before.timestamp()
-        list_videos = [v for v in list_videos if os.path.getmtime(v) < cutoff_timestamp]
+        kept_videos = []
+        for video_path in list_videos:
+            if os.path.getmtime(video_path) < cutoff_timestamp:
+                kept_videos.append(video_path)
+            else:
+                rejected_videos.append(video_path)
+        list_videos = kept_videos
 
     if not list_videos:
         console.print("No videos to process")
         return
 
     if os.path.isdir(input_arg):
+        if rejected_videos:
+            console.print(Rule("[bold yellow]Rejected videos[/bold yellow]"))
+            console.print("Videos excluded by the active filters.")
+            console.print(build_file_tree(input_arg, rejected_videos))
+        console.print(Rule("[bold green]Videos to convert[/bold green]"))
+        console.print("Videos that matched the supported extensions and passed all active filters.")
         console.print(build_file_tree(input_arg, list_videos))
         console.print("\nListed items will be converted")
         if not Confirm.ask("Do you accept?"):
