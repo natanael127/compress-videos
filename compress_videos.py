@@ -97,9 +97,18 @@ def main():
     storage_saving = 0
     for input_video_path in list_videos:
         output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
-        cmd_result = subprocess.run(
+        proc = subprocess.Popen(
             ["ffmpeg", "-i", input_video_path, "-vcodec", "libx265", "-crf", "28", temp_video_path]
-        ).returncode
+        )
+        try:
+            cmd_result = proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            proc.wait()
+            if os.path.isfile(temp_video_path):
+                os.remove(temp_video_path)
+            print(f"\nCancelled by user. You have just saved {data_size_string(storage_saving)}")
+            return
         conversion_succeeded = cmd_result == 0 and os.path.isfile(temp_video_path)
         if conversion_succeeded: # Success
             saving = os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
