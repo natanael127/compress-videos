@@ -37,42 +37,46 @@ def data_size_string(num_bytes):
     return f"{num_bytes:,.3f} {units[i]}B"
 
 # ===================== MAIN SCRIPT ========================================== #
-# --------------------- Argument validation
-parser = argparse.ArgumentParser(description="Compress videos using ffmpeg (libx265).")
-parser.add_argument("path", help="Path to a video file or a directory to search recursively")
-args = parser.parse_args()
+def main():
+    # --------------------- Argument validation
+    parser = argparse.ArgumentParser(description="Compress videos using ffmpeg (libx265).")
+    parser.add_argument("path", help="Path to a video file or a directory to search recursively")
+    args = parser.parse_args()
 
-input_arg = os.path.abspath(args.path)
-if os.path.isfile(input_arg):
-    list_videos = [input_arg]
-elif os.path.isdir(input_arg):
-    list_videos = list_files_by_extension_recursive(input_arg, INPUT_FORMATS)
-    list_videos.sort()
-    for item in list_videos:
-        print(item)
-    print("\nListed items will be converted")
-    yes_or_no = pyinputplus.inputYesNo("Do you accept? [Y/N]: ")
-    if yes_or_no == "no":
-        exit()
-else:
-    print("Invalid path")
-    exit()
-# --------------------- Video conversion
-fp, temp_video_path = tempfile.mkstemp(suffix=OUTPUT_FORMAT, prefix=TMP_FILE_PREFIX)
-os.close(fp)
-os.remove(temp_video_path)
-storage_saving = 0
-for input_video_path in list_videos:
-    output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
-    cmd_result = os.system(f"ffmpeg -i \"{input_video_path}\" -vcodec libx265 -crf 28 \"{temp_video_path}\"")
-    if cmd_result == 0: # Success
-        storage_saving += os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
-        os.remove(input_video_path)
-        shutil.move(temp_video_path, output_video_path)
-    else: # Error
-        if os.path.isfile(temp_video_path):
-            os.remove(temp_video_path)
-        error_log = "[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] Returned " + str(cmd_result) + " for file \"" + input_video_path + "\"\n"
-        with open(FILE_ERROR_LOG, "a", encoding="utf-8") as fp:
-            fp.write(error_log)
-print(f"================\nYou have just saved {data_size_string(storage_saving)}")
+    input_arg = os.path.abspath(args.path)
+    if os.path.isfile(input_arg):
+        list_videos = [input_arg]
+    elif os.path.isdir(input_arg):
+        list_videos = list_files_by_extension_recursive(input_arg, INPUT_FORMATS)
+        list_videos.sort()
+        for item in list_videos:
+            print(item)
+        print("\nListed items will be converted")
+        yes_or_no = pyinputplus.inputYesNo("Do you accept? [Y/N]: ")
+        if yes_or_no == "no":
+            return
+    else:
+        print("Invalid path")
+        return
+    # --------------------- Video conversion
+    fp, temp_video_path = tempfile.mkstemp(suffix=OUTPUT_FORMAT, prefix=TMP_FILE_PREFIX)
+    os.close(fp)
+    os.remove(temp_video_path)
+    storage_saving = 0
+    for input_video_path in list_videos:
+        output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
+        cmd_result = os.system(f"ffmpeg -i \"{input_video_path}\" -vcodec libx265 -crf 28 \"{temp_video_path}\"")
+        if cmd_result == 0: # Success
+            storage_saving += os.path.getsize(input_video_path) - os.path.getsize(temp_video_path)
+            os.remove(input_video_path)
+            shutil.move(temp_video_path, output_video_path)
+        else: # Error
+            if os.path.isfile(temp_video_path):
+                os.remove(temp_video_path)
+            error_log = "[" + time.strftime("%Y-%m-%d %H:%M:%S") + "] Returned " + str(cmd_result) + " for file \"" + input_video_path + "\"\n"
+            with open(FILE_ERROR_LOG, "a", encoding="utf-8") as fp:
+                fp.write(error_log)
+    print(f"================\nYou have just saved {data_size_string(storage_saving)}")
+
+if __name__ == "__main__":
+    main()
