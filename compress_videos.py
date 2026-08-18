@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import argparse
 import pyinputplus
+from datetime import datetime
 
 # ===================== CONSTANTS ============================================ #
 INPUT_FORMATS = [".mp4", ".mkv", ".avi", ".MOV"]
@@ -28,6 +29,16 @@ def list_files_by_extension_recursive(directory, extension):
                     output_list.append(os.path.join(directory, file_path))
     return output_list
 
+def parse_datetime_arg(value):
+    for date_format in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, date_format)
+        except ValueError:
+            continue
+    raise argparse.ArgumentTypeError(
+        f"Invalid date/time '{value}'. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS"
+    )
+
 def data_size_string(num_bytes):
     units = ['', 'Ki', 'Mi', 'Gi']
     i = 0
@@ -41,6 +52,12 @@ def main():
     # --------------------- Argument validation
     parser = argparse.ArgumentParser(description="Compress videos using ffmpeg (libx265).")
     parser.add_argument("path", help="Path to a video file or a directory to search recursively")
+    parser.add_argument(
+        "--modified-before",
+        type=parse_datetime_arg,
+        default=None,
+        help="Process only videos modified before this date/time (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
+    )
     args = parser.parse_args()
 
     input_arg = os.path.abspath(args.path)
@@ -49,15 +66,25 @@ def main():
     elif os.path.isdir(input_arg):
         list_videos = list_files_by_extension_recursive(input_arg, INPUT_FORMATS)
         list_videos.sort()
+    else:
+        print("Invalid path")
+        return
+
+    if args.modified_before is not None:
+        cutoff_timestamp = args.modified_before.timestamp()
+        list_videos = [v for v in list_videos if os.path.getmtime(v) < cutoff_timestamp]
+
+    if not list_videos:
+        print("No videos to process")
+        return
+
+    if os.path.isdir(input_arg):
         for item in list_videos:
             print(item)
         print("\nListed items will be converted")
         yes_or_no = pyinputplus.inputYesNo("Do you accept? [Y/N]: ")
         if yes_or_no == "no":
             return
-    else:
-        print("Invalid path")
-        return
     # --------------------- Video conversion
     fp, temp_video_path = tempfile.mkstemp(suffix=OUTPUT_FORMAT, prefix=TMP_FILE_PREFIX)
     os.close(fp)
