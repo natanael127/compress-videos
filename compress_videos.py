@@ -10,6 +10,7 @@ from datetime import datetime
 from rich.console import Console, Group
 from rich.live import Live
 from rich.prompt import Confirm
+from rich.tree import Tree
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -63,6 +64,23 @@ def data_size_string(num_bytes):
         i += 1
     return f"{num_bytes:,.3f} {units[i]}B"
 
+def build_file_tree(root_directory, file_paths):
+    tree = Tree(f"[bold]{root_directory}[/bold]")
+    branch_by_dir = {root_directory: tree}
+    for file_path in sorted(file_paths):
+        relative_path = os.path.relpath(file_path, root_directory)
+        parent_branch = tree
+        current_dir = root_directory
+        for part in os.path.dirname(relative_path).split(os.sep):
+            if not part:
+                continue
+            current_dir = os.path.join(current_dir, part)
+            if current_dir not in branch_by_dir:
+                branch_by_dir[current_dir] = parent_branch.add(f"[bold]{part}[/bold]")
+            parent_branch = branch_by_dir[current_dir]
+        parent_branch.add(os.path.basename(file_path), style="dim")
+    return tree
+
 def get_video_duration_seconds(video_path):
     try:
         result = subprocess.run(
@@ -110,8 +128,7 @@ def main():
         return
 
     if os.path.isdir(input_arg):
-        for item in list_videos:
-            console.print(item, style="dim")
+        console.print(build_file_tree(input_arg, list_videos))
         console.print("\nListed items will be converted")
         if not Confirm.ask("Do you accept?"):
             return
