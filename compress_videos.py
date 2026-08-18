@@ -7,7 +7,8 @@ import argparse
 import subprocess
 from datetime import datetime
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.prompt import Confirm
 from rich.progress import (
     Progress,
@@ -15,7 +16,9 @@ from rich.progress import (
     TextColumn,
     BarColumn,
     MofNCompleteColumn,
+    TaskProgressColumn,
     TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 
 # ===================== CONSTANTS ============================================ #
@@ -59,6 +62,17 @@ def data_size_string(num_bytes):
         num_bytes /= 1024.0
         i += 1
     return f"{num_bytes:,.3f} {units[i]}B"
+
+def get_video_duration_seconds(video_path):
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, check=True,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+        return None
 
 # ===================== MAIN SCRIPT ========================================== #
 def main():
@@ -104,28 +118,52 @@ def main():
 
     # --------------------- Video conversion
     storage_saving = 0
-    progress_columns = (
+    overall_progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
+        console=console,
+    )
+    current_progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
     )
     with tempfile.TemporaryDirectory(prefix=TMP_FILE_PREFIX) as temp_dir:
         temp_video_path = os.path.join(temp_dir, "output" + OUTPUT_FORMAT)
-        with Progress(*progress_columns, console=console) as progress:
-            task = progress.add_task("Compressing videos", total=len(list_videos))
+        with Live(Group(overall_progress, current_progress), console=console):
+            overall_task = overall_progress.add_task("Compressing videos", total=len(list_videos))
+            current_task = current_progress.add_task("Current file", total=None)
             for input_video_path in list_videos:
-                progress.update(task, description=os.path.basename(input_video_path))
+                overall_progress.update(overall_task, description=os.path.basename(input_video_path))
+                video_duration = get_video_duration_seconds(input_video_path)
+                current_progress.reset(
+                    current_task,
+                    total=video_duration,
+                    description=os.path.basename(input_video_path),
+                )
                 output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
                 with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file:
                     proc = subprocess.Popen(
                         ["ffmpeg", "-y", "-nostdin", "-i", input_video_path,
-                         "-vcodec", "libx265", "-crf", "28", temp_video_path],
-                        stdout=subprocess.DEVNULL,
+                         "-vcodec", "libx265", "-crf", "28", "-nostats",
+                         "-progress", "pipe:1", temp_video_path],
+                        stdout=subprocess.PIPE,
                         stderr=stderr_file,
+                        text=True,
                     )
                     try:
+                        for line in proc.stdout:
+                            if line.startswith("out_time_us="):
+                                out_time_seconds = int(line.split("=", 1)[1]) / 1_000_000
+                                if video_duration is not None:
+                                    out_time_seconds = min(out_time_seconds, video_duration)
+                                current_progress.update(current_task, completed=out_time_seconds)
                         cmd_result = proc.wait()
                     except KeyboardInterrupt:
                         proc.terminate()
@@ -157,7 +195,7 @@ def main():
                         )
                         with open(FILE_ERROR_LOG, "a", encoding="utf-8") as fp:
                             fp.write(error_log)
-                progress.advance(task)
+                overall_progress.advance(overall_task)
     console.print(f"================\n[green]You have just saved {data_size_string(storage_saving)}[/green]")
 
 if __name__ == "__main__":
