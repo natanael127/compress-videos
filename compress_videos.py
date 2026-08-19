@@ -27,6 +27,7 @@ from rich.progress import (
 # ===================== CONSTANTS ============================================ #
 INPUT_FORMATS = [".mp4", ".mkv", ".avi", ".mov"]
 OUTPUT_FORMAT = ".mp4"
+OUTPUT_CODEC = "hevc"
 TMP_FILE_PREFIX = "compressed_video_"
 FILE_ERROR_LOG = "video_compression_errors.log"
 
@@ -116,6 +117,21 @@ def get_video_duration_seconds(video_path):
     except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
         return None
 
+def get_video_codec(video_path):
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip().lower() or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+def is_already_compressed(video_path):
+    video_ext = os.path.splitext(video_path)[1].lower()
+    return video_ext == OUTPUT_FORMAT and get_video_codec(video_path) == OUTPUT_CODEC
+
 # ===================== MAIN SCRIPT ========================================== #
 def main():
     # --------------------- Argument validation
@@ -126,6 +142,11 @@ def main():
         type=parse_datetime_arg,
         default=None,
         help="Process only videos modified before this date/time (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
+    )
+    parser.add_argument(
+        "--filter-codec",
+        action="store_true",
+        help=f"Skip videos that already appear compressed ({OUTPUT_FORMAT} + {OUTPUT_CODEC} codec)",
     )
     args = parser.parse_args()
 
@@ -154,16 +175,25 @@ def main():
                 rejected_videos.append(video_path)
         list_videos = kept_videos
 
+    if args.filter_codec:
+        kept_videos = []
+        for video_path in list_videos:
+            if is_already_compressed(video_path):
+                rejected_videos.append(video_path)
+            else:
+                kept_videos.append(video_path)
+        list_videos = kept_videos
+
     if not list_videos:
         console.print("No videos to process")
         return
 
     if os.path.isdir(input_arg):
         if rejected_videos:
-            console.print(Rule("[bold yellow]Rejected videos[/bold yellow]"))
+            console.print(Rule(f"[bold yellow]Rejected videos ({len(rejected_videos)})[/bold yellow]"))
             console.print("Videos excluded by the active filters.")
             console.print(build_file_tree(input_arg, rejected_videos))
-        console.print(Rule("[bold green]Videos to convert[/bold green]"))
+        console.print(Rule(f"[bold green]Videos to convert ({len(list_videos)})[/bold green]"))
         console.print("Videos that matched the supported extensions and passed all active filters.")
         console.print(build_file_tree(input_arg, list_videos))
         console.print("\nListed items will be converted")
