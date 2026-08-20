@@ -6,6 +6,7 @@ import tempfile
 import argparse
 import subprocess
 from datetime import datetime
+from dataclasses import dataclass
 
 from rich.console import Console
 from rich.live import Live
@@ -106,31 +107,59 @@ def build_file_tree(root_directory, file_paths):
         parent_branch.add(os.path.basename(file_path), style="dim")
     return tree
 
-def get_video_duration_seconds(video_path):
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
-            capture_output=True, text=True, check=True,
-        )
-        return float(result.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
-        return None
+@dataclass
+class VideoMetadata:
+    codec: str | None = None
+    width: int | None = None
+    height: int | None = None
+    duration: float | None = None
 
-def get_video_codec(video_path):
+    @property
+    def resolution(self):
+        if self.width is None or self.height is None:
+            return "?"
+        return f"{self.width}x{self.height}"
+
+def get_video_metadata(video_path):
+    metadata = VideoMetadata()
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+             "stream=codec_name,width,height:format=duration",
+             "-of", "default=noprint_wrappers=1", video_path],
             capture_output=True, text=True, check=True,
         )
-        return result.stdout.strip().lower() or None
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+        return metadata
+    for line in result.stdout.splitlines():
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if key == "codec_name":
+            metadata.codec = value.lower() or None
+        elif key == "width" and value.isdigit():
+            metadata.width = int(value)
+        elif key == "height" and value.isdigit():
+            metadata.height = int(value)
+        elif key == "duration":
+            try:
+                metadata.duration = float(value)
+            except ValueError:
+                metadata.duration = None
+    return metadata
 
-def is_already_compressed(video_path):
+def format_duration_seconds(seconds):
+    if seconds is None:
+        return "?"
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+def is_already_compressed(video_path, codec):
     video_ext = os.path.splitext(video_path)[1].lower()
-    return video_ext == OUTPUT_FORMAT and get_video_codec(video_path) == OUTPUT_CODEC
+    return video_ext == OUTPUT_FORMAT and codec == OUTPUT_CODEC
 
 # ===================== MAIN SCRIPT ========================================== #
 def main():
@@ -175,19 +204,23 @@ def main():
                 rejected_videos.append(video_path)
         list_videos = kept_videos
 
+    video_metadata = {}
+    with Progress(
+        SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
+        TextColumn("Analisando vídeos"), console=console,
+    ) as scan_progress:
+        scan_task = scan_progress.add_task("scan", total=len(list_videos))
+        for video_path in list_videos:
+            video_metadata[video_path] = get_video_metadata(video_path)
+            scan_progress.advance(scan_task)
+
     if args.filter_codec:
         kept_videos = []
-        with Progress(
-            SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
-            TextColumn("Verificando codec dos vídeos"), console=console,
-        ) as scan_progress:
-            scan_task = scan_progress.add_task("scan", total=len(list_videos))
-            for video_path in list_videos:
-                if is_already_compressed(video_path):
-                    rejected_videos.append(video_path)
-                else:
-                    kept_videos.append(video_path)
-                scan_progress.advance(scan_task)
+        for video_path in list_videos:
+            if is_already_compressed(video_path, video_metadata[video_path].codec):
+                rejected_videos.append(video_path)
+            else:
+                kept_videos.append(video_path)
         list_videos = kept_videos
 
     if not list_videos:
@@ -242,8 +275,13 @@ def main():
             current_task.add_task("Current file", total=None)
             video_name_task.add_task("", total=None)
             for input_video_path in list_videos:
-                video_name_task.update(description=os.path.basename(input_video_path))
-                video_duration = get_video_duration_seconds(input_video_path)
+                metadata = video_metadata[input_video_path]
+                video_duration = metadata.duration
+                video_name_task.update(
+                    description=f"{os.path.basename(input_video_path)} "
+                    f"({metadata.codec or '?'}, {metadata.resolution}, "
+                    f"{format_duration_seconds(video_duration)})"
+                )
                 current_task.reset(total=video_duration)
                 output_video_path = os.path.splitext(input_video_path)[0] + OUTPUT_FORMAT
                 with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file:
