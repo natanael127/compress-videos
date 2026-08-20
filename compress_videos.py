@@ -177,11 +177,17 @@ def main():
 
     if args.filter_codec:
         kept_videos = []
-        for video_path in list_videos:
-            if is_already_compressed(video_path):
-                rejected_videos.append(video_path)
-            else:
-                kept_videos.append(video_path)
+        with Progress(
+            SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
+            TextColumn("Verificando codec dos vídeos"), console=console,
+        ) as scan_progress:
+            scan_task = scan_progress.add_task("scan", total=len(list_videos))
+            for video_path in list_videos:
+                if is_already_compressed(video_path):
+                    rejected_videos.append(video_path)
+                else:
+                    kept_videos.append(video_path)
+                scan_progress.advance(scan_task)
         list_videos = kept_videos
 
     if not list_videos:
