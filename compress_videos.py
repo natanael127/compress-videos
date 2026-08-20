@@ -207,7 +207,7 @@ def main():
     video_metadata = {}
     with Progress(
         SpinnerColumn(), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn(),
-        TextColumn("Analisando vídeos"), console=console,
+        TextColumn("Analyzing videos"), console=console,
     ) as scan_progress:
         scan_task = scan_progress.add_task("scan", total=len(list_videos))
         for video_path in list_videos:
